@@ -33,14 +33,30 @@ def get_crypto_data():
     }
 
     try:
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(
+            url,
+            params=params,
+            timeout=10
+        )
+
+        # Handle rate limiting separately
+        if response.status_code == 429:
+            st.warning(
+                "⏳ Live market data is temporarily unavailable. "
+                "Please try again shortly."
+            )
+            return pd.DataFrame()
+
         response.raise_for_status()
 
         data = response.json()
 
-        # Check if valid data
+        # Validate API response
         if not isinstance(data, list) or len(data) == 0:
-            st.warning("⚠️ API limit reached or no data available")
+            st.warning(
+                "⚠️ Market data is temporarily unavailable. "
+                "Please try again shortly."
+            )
             return pd.DataFrame()
 
         df = pd.DataFrame(data)
@@ -52,40 +68,67 @@ def get_crypto_data():
             "current_price",
             "price_change_percentage_24h",
             "total_volume",
-    ]
-        
+        ]
 
-        missing_cols = [col for col in required_cols if col not in df.columns]
+        missing_cols = [
+            col for col in required_cols
+            if col not in df.columns
+        ]
 
         if missing_cols:
-            st.error(f"Missing columns: {missing_cols}")
+            st.warning(
+                "⚠️ Market data is temporarily unavailable. "
+                "Please try again shortly."
+            )
             return pd.DataFrame()
 
         df = df[required_cols]
-        df.columns = ["ID", "Symbol", "Coin", "Price", "24h Change (%)", "Volume"]
+
+        df.columns = [
+            "ID",
+            "Symbol",
+            "Coin",
+            "Price",
+            "24h Change (%)",
+            "Volume"
+        ]
 
         return df
 
     except requests.exceptions.Timeout:
-        st.error("⏳ Request timed out. Please try again in a few seconds.")
+        st.warning(
+            "⏳ Market data request timed out. "
+            "Please try again shortly."
+        )
         return pd.DataFrame()
 
     except requests.exceptions.ConnectionError:
-        st.error("🌐 Internet connection error. Please check your network.")
+        st.warning(
+            "🌐 Unable to connect to the market data service. "
+            "Please try again shortly."
+        )
         return pd.DataFrame()
 
-    except requests.exceptions.HTTPError as err:
-        st.error(f"🚨 HTTP Error: {err}")
+    except requests.exceptions.HTTPError:
+        st.warning(
+            "⚠️ Market data is temporarily unavailable. "
+            "Please try again shortly."
+        )
         return pd.DataFrame()
 
-    except requests.exceptions.RequestException as err:
-        st.error(f"⚠️ Request Error: {err}")
+    except requests.exceptions.RequestException:
+        st.warning(
+            "⚠️ Unable to retrieve live market data. "
+            "Please try again shortly."
+        )
         return pd.DataFrame()
 
-    except Exception as e:
-        st.error(f"❌ Unexpected Error: {e}")
+    except Exception:
+        st.warning(
+            "⚠️ Something went wrong while loading market data. "
+            "Please try again shortly."
+        )
         return pd.DataFrame()
-
 # -------------------------------
 # Load Data
 # -------------------------------
@@ -641,9 +684,7 @@ with col1:
 <div class="market-change positive">+3.12%</div>
 </div>
 
-<div class="view-all">
-View All →
-</div>
+
 </div>
 
 """, unsafe_allow_html=True)
@@ -677,9 +718,7 @@ with col2:
 <div class="market-change negative">-1.50%</div>
 </div>
 
-<div class="view-all">
-View All →
-</div>
+
 
 </div>
 """, unsafe_allow_html=True)
@@ -711,9 +750,7 @@ with col3:
 <div class="market-change positive">3.12%</div>
 </div>
 
-<div class="view-all">
-View All →
-</div>
+
 
 </div>
 """, unsafe_allow_html=True)
@@ -723,50 +760,6 @@ st.markdown("<br>", unsafe_allow_html=True)
 # -------------------------------
 # Data for Performance_df
 # -------------------------------
-
-
-# performance_df = pd.DataFrame({
-#     "Coin": [
-#         "Bitcoin",
-#         "Ethereum",
-#         "Solana",
-#         "XRP",
-#         "BNB",
-#         "TRON",
-#         "Hyperliquid"
-#     ],
-
-#     "24H Change (%)": [
-#         2.35,
-#         4.82,
-#         -1.25,
-#         3.14,
-#         0.92,
-#         -2.10,
-#         6.47
-#     ],
-
-#     "Price": [
-#         118250,
-#         4220,
-#         178,
-#         3.12,
-#         589,
-#         0.33,
-#         55.26
-#     ],
-
-#     "Volume": [
-#         "82.3B",
-#         "24.7B",
-#         "8.1B",
-#         "5.8B",
-#         "2.9B",
-#         "1.7B",
-#         "1.2B"
-#     ]
-# })
-
 
 
 # ==========================================================
@@ -870,6 +863,7 @@ performance_fig.update_layout(
     plot_bgcolor="rgba(0,0,0,0)",
     paper_bgcolor="rgba(0,0,0,0)",
     margin=dict(l=20, r=20, t=20, b=20),
+    dragmode=False,
     height=400
 )
 performance_fig.update_xaxes(
@@ -909,13 +903,14 @@ performance_fig.update_traces(
         "<extra></extra>"
 )
 
-
-
-
 st.plotly_chart(
     performance_fig,
     use_container_width=True,
-    config={"displayModeBar": False}
+    config={
+        "displayModeBar": False,
+        "scrollZoom": False,
+        "doubleClick": False
+    }
 )
 
 
@@ -999,7 +994,9 @@ fig.update_layout(
     paper_bgcolor="rgba(0,0,0,0)",
     margin=dict(l=20, r=20, t=20, b=20),
     hovermode="closest",
-    height=450
+    dragmode=False,
+    height=450 
+    
 )
 
 fig.update_xaxes(
@@ -1022,37 +1019,20 @@ fig.update_traces(
 )
 
 
+
 st.plotly_chart(
     fig,
     use_container_width=True,
-    config={"displayModeBar": False}
+    config={
+    "displayModeBar": False,
+    "scrollZoom": False,
+    "doubleClick": False
+    }
 )
 
-# -------------------------------
-# AI Summary Section
-# -------------------------------
-# st.markdown("##  AI Market Summary")
-
-
-
-# col1, col2 = st.columns(2)
-
-# with col1:
-#         st.markdown("""
-#         <div class="ai-metric-card">
-#             <strong>🤖 AI Confidence</strong>
-#             <div class="ai-metric-value">91%</div>
-#         </div>
-#         """, unsafe_allow_html=True)
-
-# with col2:
-#         st.markdown("""
-#         <div class="ai-metric-card">
-#             <strong>💚 Market Health</strong>
-#             <div class="ai-metric-value">82/100</div>
-#         </div>
-#         """, unsafe_allow_html=True)
-
+# ---------------------------------------------------------
+# Market Insights
+# ---------------------------------------------------------
 
 st.markdown("### Market Insights")
 
@@ -1089,16 +1069,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Market Activity
-st.markdown(f"""
-<div class="ai-insight">
-    <span class="ai-icon">💰</span>
-    <span>
-        <strong>Market Activity</strong><br>
-        {market_activity_text}
-    </span>
-</div>
-""", unsafe_allow_html=True)
+
 # Market Risk
 st.markdown(f"""
 <div class="ai-insight">
