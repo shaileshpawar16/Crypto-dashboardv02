@@ -1,5 +1,6 @@
 import numpy as np
 import streamlit as st
+from google import genai
 import pandas as pd
 import requests
 from websockets import Data
@@ -7,6 +8,48 @@ import plotly.express as px
 
 # Page Config
 st.set_page_config(page_title="Crypto Dashboard v1.2", layout="wide")
+
+# ==========================================================
+# AI ASSISTANT
+# ==========================================================
+
+GEMINI_API_KEY = st.secrets["Gemini_api_key"]
+
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+AI_SYSTEM_INSTRUCTION = """
+You are the conversational AI assistant for Crypto Market Intelligence.
+
+Your purpose is to help users understand cryptocurrency and the information
+shown in this dashboard.
+
+Use simple, everyday language.
+Avoid technical terminology unless necessary.
+If you must use a technical term, explain it immediately in simple language.
+Do not make answers unnecessarily academic or complicated.
+Prefer short explanations, practical examples, and simple analogies.
+Write for someone who may know very little about cryptocurrency.
+
+You can answer questions about cryptocurrency, blockchain, Bitcoin, Ethereum,
+altcoins, stablecoins, DeFi, NFTs, wallets, mining, consensus mechanisms,
+tokenomics, market capitalization, volume, volatility, historical performance,
+and other cryptocurrency-related concepts.
+
+Do not provide trading functionality, buy/sell signals, or personalized
+trading recommendations.
+
+When a question relates to the dashboard, use the dashboard data provided
+to you. Do not invent values or market information.
+
+If the dashboard data is insufficient to answer a question, say so.
+
+Be conversational, friendly, clear, and easy to understand.
+Prefer plain language and useful examples.
+
+For complex concepts, explain them step by step when appropriate and asked
+by the user.
+"""
+
 # ------------------------------------------------------------
 # Title
 # ------------------------------------------------------------
@@ -156,6 +199,13 @@ def get_historical_data(coin_id, days=30):
             params=params,
             timeout=10
         )
+
+        if response.status_code == 429:
+            st.warning(
+                "⏳ Historical market data is temporarily unavailable. "
+                "Please try again shortly."
+            )
+            return pd.DataFrame()
 
         response.raise_for_status()
 
@@ -1031,6 +1081,89 @@ st.plotly_chart(
 )
 
 # ---------------------------------------------------------
+# Dashboard Context for AI Integration
+# ---------------------------------------------------------
+def build_dashboard_context(selected_data, historical_df=None):
+    """
+    Build a compact snapshot of the dashboard data for the future AI assistant.
+
+    This function does not call any API and does not connect to Gemini.
+    It only prepares the information already available in the dashboard.
+    """
+    if selected_data.empty:
+        return {
+            "selected_coins": [],
+            "coin_data": [],
+            "top_performer": None,
+            "weakest_performer": None,
+            "market_sentiment": "No data",
+            "market_risk": "No data",
+        }
+
+    coin_data = []
+    for _, row in selected_data.iterrows():
+        coin_data.append({
+            "coin": row["Coin"],
+            "symbol": row["Symbol"],
+            "price_usd": float(row["Price"]),
+            "change_24h_percent": float(row["24H Change (%)"]),
+            "volume_usd": float(row["Volume"]),
+        })
+
+    context = {
+        "selected_coins": selected_data["Coin"].tolist(),
+        "coin_data": coin_data,
+        "top_performer": {
+            "coin": top_performer["Coin"],
+            "change_24h_percent": float(top_performer["24H Change (%)"]),
+        },
+        "weakest_performer": {
+            "coin": weakest_performer["Coin"],
+            "change_24h_percent": float(weakest_performer["24H Change (%)"]),
+        },
+        "market_sentiment": market_sentiment_text,
+        "market_risk": market_risk_text,
+    }
+
+    if historical_df is not None and not historical_df.empty:
+        historical_summary = []
+
+        for coin, group in historical_df.groupby("Coin"):
+            if group.empty:
+                continue
+
+            first_price = float(group["Price"].iloc[0])
+            last_price = float(group["Price"].iloc[-1])
+
+            if first_price != 0:
+                performance = ((last_price / first_price) - 1) * 100
+            else:
+                performance = None
+
+            historical_summary.append({
+                "coin": coin,
+                "period_days": days,
+                "performance_percent": performance,
+            })
+
+        context["historical_summary"] = historical_summary
+    else:
+        context["historical_summary"] = []
+
+    return context
+
+
+
+
+# ---------------------------------------------------------
+# Build the current dashboard context for AI
+# ---------------------------------------------------------
+dashboard_context = build_dashboard_context(
+    selected_data,
+    historical_df
+)
+
+# ---------------------------------------------------------
 # Market Insights
 # ---------------------------------------------------------
 
@@ -1081,15 +1214,129 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# AI Observation
+# ==========================================================
+# ASK AI
+# ==========================================================
 
-# ask_ai = st.button(
-#     "✦ Ask AI",
-#     key="ask_ai"
-# )
-# if ask_ai:
-#     st.info(
-#         "AI analysis will use the currently selected coins, "
-#         "24H performance, historical performance, volume, "
-#         "and market risk."
-#     )
+st.markdown("<br>", unsafe_allow_html=True)
+
+st.markdown(
+    """
+    <div class="section-header">
+        <div class="section-title">🤖 Ask AI</div>
+        <div class="section-subtitle">
+            Ask about cryptocurrency or the data shown on this dashboard.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+if "ai_open" not in st.session_state:
+    st.session_state.ai_open = False
+
+if "ai_messages" not in st.session_state:
+    st.session_state.ai_messages = []
+
+col_ai, col_clear = st.columns([5, 1])
+
+with col_ai:
+    if st.button("🤖 Ask AI", key="open_ai_button"):
+        st.session_state.ai_open = True
+
+with col_clear:
+    if st.session_state.ai_messages:
+        if st.button("Clear", key="clear_ai_button"):
+            st.session_state.ai_messages = []
+            st.rerun()
+
+if st.session_state.ai_open:
+
+    for message in st.session_state.ai_messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
+
+    ai_prompt = st.chat_input(
+        "Ask anything about cryptocurrency or this dashboard...",
+        key="crypto_ai_chat_input",
+    )
+
+    if ai_prompt:
+
+        st.session_state.ai_messages.append(
+            {
+                "role": "user",
+                "content": ai_prompt,
+            }
+        )
+
+        with st.chat_message("user"):
+            st.write(ai_prompt)
+
+        dashboard_context_text = str(dashboard_context)
+
+        conversation = [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": (
+                            "Here is the current dashboard data. "
+                            "Use it when answering dashboard-related questions. "
+                            "Do not invent or change these values.\n\n"
+                            + dashboard_context_text
+                        )
+                    }
+                ],
+            }
+        ]
+
+        for message in st.session_state.ai_messages:
+            conversation.append(
+                {
+                    "role": (
+                        "user"
+                        if message["role"] == "user"
+                        else "model"
+                    ),
+                    "parts": [
+                        {
+                            "text": message["content"]
+                        }
+                    ],
+                }
+            )
+
+        try:
+
+            response = gemini_client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=conversation,
+                config={
+                    "system_instruction": AI_SYSTEM_INSTRUCTION
+                },
+            )
+
+            answer = response.text or (
+                "⚠️ I couldn't generate a response right now. "
+                "Please try again shortly."
+            )
+
+        except Exception:
+
+            answer = (
+                "⚠️ I'm temporarily unable to respond right now. "
+                "Please try again in a little while."
+            )
+
+        st.session_state.ai_messages.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+
+        with st.chat_message("assistant"):
+            st.write(answer)
+
+
